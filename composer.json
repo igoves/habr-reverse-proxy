@@ -1,0 +1,23 @@
+{
+    "name": "utz0r2/habr-reverse-proxy",
+    "description": "habr reverse proxy - test task from ivelum",
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "HabrReverseProxy\\": "src/"
+        }
+    },
+    "authors": [
+        {
+            "name": "Igor Veselov",
+            "email": "utz0r2@gmail.com"
+        }
+    ],
+    "require": {
+        "simplehtmldom/simplehtmldom": "dev-master",
+      "ext-mbstring": "*"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "7"
+    }
+}
