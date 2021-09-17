@@ -2,7 +2,7 @@
 
 
 ## Overview
-Test task for Ivelum. Look at [requirements](https://github.com/utz0r2/habr-reverse-proxy/requirements.md).
+Test task for Ivelum. Look at [requirements](https://github.com/utz0r2/habr-reverse-proxy/blob/master/requirements.md).
 
 ___
 
