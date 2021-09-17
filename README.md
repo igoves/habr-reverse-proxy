@@ -23,7 +23,7 @@ cd habr-reverse-proxy
 Start the application :
 
 ```sh
-sudo docker-compose up
+docker-compose up
 ```
 
 Open your favorite browser :
@@ -33,7 +33,7 @@ Open your favorite browser :
 Stop and clear services
 
 ```sh
-sudo docker-compose down -v
+docker-compose down -v
 ```
 
 ___
