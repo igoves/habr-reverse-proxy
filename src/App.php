@@ -2,183 +2,173 @@
 
 namespace HabrReverseProxy;
 
-use simplehtmldom\HtmlWeb;
+use simplehtmldom\HtmlDocument;
 
 final class App
 {
-    private $html;
-    private $client;
     private $path;
-    private $remote;
     private const PROXY_URL = 'https://habr.com/';
     private const WORD_LENGTH = 6;
 
     public function __construct($request)
     {
-        $this->path = isset($request['path']) && $this->validateURL(self::PROXY_URL . $request['path']) ?
-            self::PROXY_URL . $request['path'] : self::PROXY_URL . 'en/all/';
-
-        if ($this->path === self::PROXY_URL . 'en/') {
-            $this->path = self::PROXY_URL . 'en/all/';
-        }
-
-        if ($this->path === self::PROXY_URL . 'ru/') {
-            $this->path = self::PROXY_URL . 'ru/all/';
-        }
-
-        $this->remote = isset($request['remote']) && $this->validateURL($request['remote']) ? $request['remote'] : '';
-
-        $this->client = new HtmlWeb();
-    }
-
-    public function run(): string
-    {
-        $this->responseStaticContents();
-        if ($this->getHttpResponseCode() === "404") {
-            die('error page not found');
-        }
-        $this->showResponseImage($this->path);
-        $this->html = $this->client->load($this->path);
-        $this->modifyImages();
-        $this->modifyContents();
-        $this->injectContents();
-
-        return $this->html;
-    }
-
-    private function validateURL($url): bool
-    {
-        return (bool)filter_var($url, FILTER_VALIDATE_URL);
-    }
-
-    public function getHttpResponseCode()
-    {
-        $headers = @get_headers($this->path);
-        return $headers && strpos($headers[0], '200') ? substr($headers[0], 9, 3) : die('error with url');
-    }
-
-    public function addProtocol($url): string
-    {
-        $protocol = explode('//', $url);
-
-        if (empty($protocol[0])) {
-            return 'https:';
-        }
-
-        return '';
-    }
-
-    private function showResponseImage($url): void
-    {
-        $path_parts = pathinfo($url);
-        if (isset($path_parts['extension']) && in_array($path_parts['extension'], ['png', 'jpg', 'jpeg', 'svg'])) {
-            if ($path_parts['extension'] === 'svg') {
-                $imginfo['mime'] = ' image/svg+xml';
-            } else {
-                $imginfo = getimagesize($url);
-            }
-            header("Content-type: {$imginfo['mime']}");
-            readfile($url);
+        if (isset($request['path']) && ($request['path'] === 'en/' || $request['path'] === 'ru/')) {
+            header('Location: /' . $request['path'] . 'all/');
             die();
         }
+
+        $this->path = isset($request['path']) && !empty($request['path']) ? self::PROXY_URL . $request['path'] : self::PROXY_URL;
     }
 
-    private function showResponseHtml($remote): void
+    public function run()
     {
-        echo str_replace(self::PROXY_URL, 'http://' . $_SERVER['HTTP_HOST'] . '/', $this->getPage($remote));
-        die();
+        $result = $this->getPage($this->path);
+
+        $this->checkHttpCode($result['info']);
+
+        $html = new HtmlDocument();
+        $html->load($result['response'])->plaintext;
+
+        $this->modifyImages($html);
+        $this->prepareContent($html);
+
+        header('Content-Type: ' . $result['info']['content_type']);
+        return preg_replace("/<script.*?\/script>/s", "", $html) ?: $html;
     }
 
-    private function modifyImages(): void
+    public function getPage($url): array
     {
-        $i = 0;
-        foreach ($this->html->find('img') as $element) {
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_HEADER, 0);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+        $response = curl_exec($ch);
+        $info = curl_getinfo($ch);
+        curl_close($ch);
 
+        return [
+            'response' => $response,
+            'info' => $info,
+        ];
+    }
+
+    private function checkHttpCode($info): void
+    {
+        $code = (string)$info['http_code'];
+        $code = (int)$code[0];
+
+        if ($code === 3) {
+            header('Content-Type: ' . $info['content_type']);
+            $info['redirect_url'] = str_replace(self::PROXY_URL, '', $info['redirect_url']);
+            header('Location: ' . $info['redirect_url']);
+            die();
+        }
+
+        if ($code === 4) {
+            header("HTTP/1.0 404 Not Found");
+            echo "error not found";
+            die();
+        }
+
+    }
+
+    private function modifyImages(HtmlDocument $html): void
+    {
+        foreach ($html->find('img') as $element) {
             $property = 'data-src';
             $property2 = 'data-blurred';
-
             if (isset($element->$property) && !empty($element->$property)) {
-                $this->html->find('img', $i)->src = $element->$property;
+                $element->src = $element->$property;
                 $element->$property2 = null;
-            } else {
-                $this->html->find('img', $i)->src = '/?remote=' . $this->addProtocol($element->src) . $element->src;
             }
-
-            $i++;
         }
     }
 
-    private function modifyContents(): void
+    private function searchWords(HtmlDocument $html): array
     {
-        $i = 0;
-        $class = '.article-formatted-body';
-        foreach ($this->html->find($class) as $element) {
-
-            $content = str_replace(['(', ')', '.', ';', ',', ':', '?'], '', strip_tags($element));
-            $content = explode(' ', $content);
-
-            $list = [];
-            foreach ($content as $word) {
-                if (mb_strlen(trim($word)) === self::WORD_LENGTH) {
-                    $list['/\b' . $word . '\b/u'] = $word . '&trade;';
-                }
+        $content = str_replace([
+            '(',
+            ')',
+            '.',
+            ';',
+            ',',
+            ':',
+            '?',
+            '*',
+            '"',
+            '«',
+            '»',
+            '/',
+            '+',
+            '\'',
+            '-',
+            '—',
+            '{',
+            '}',
+            '@',
+            '#',
+            '\n',
+            '[',
+            ']',
+        ], '', strip_tags($html));
+        $content = explode(' ', $content);
+        $list = [];
+        foreach ($content as $word) {
+            $word = trim($word);
+            if (mb_detect_encoding($word) === 'ASCII') {
+                $word = mb_convert_encoding($word, "UTF-8");
+            }
+            if (iconv_strlen($word, 'UTF-8') === self::WORD_LENGTH) {
+                $list['#(\b' . $word . '\b)#u'] = $word . '&trade;';
             }
 
+        }
+        return $list;
+    }
+
+    private function prepareContent(HtmlDocument $html): void
+    {
+        $list = $this->searchWords($html);
+
+        foreach ($html->find('.tm-main-menu a') as $element) {
+            $element->outertext = preg_replace(array_keys($list), array_values($list), $element);
+        }
+
+        foreach ($html->find('.tm-page__top a') as $element) {
+            $element->outertext = preg_replace(array_keys($list), array_values($list), $element);
+        }
+
+        foreach ($html->find('.tm-articles-list__item') as $element) {
+            $element->outertext = preg_replace(array_keys($list), array_values($list), $element);
+        }
+
+        foreach ($html->find('.tm-page-article__content') as $element) {
+            $element->outertext = preg_replace(array_keys($list), array_values($list), $element);
+            $element->outertext = preg_replace_callback(
+                '/<code[^>]*>(.*?)<\/code>/si',
+                static function ($matches) {
+                    return htmlentities(str_replace('&trade;', '', $matches[1]));
+                },
+                $element->outertext
+            );
+            $element->outertext = str_replace(['<b><b></b>', '<b><s></b>', '<b><i></b>'], ['<b>&lt;b></b>', '<b>&lt;s></b>', '<b>&lt;i></b>'], $element->outertext);
+
+        }
+
+        foreach ($html->find('.tm-page-article__additional-blocks') as $element) {
+            $element->outertext = preg_replace(array_keys($list), array_values($list), $element);
+        }
+
+        foreach ($html->find('.tm-comment__body-content') as $element) {
             $content_replaced = preg_replace(array_keys($list), array_values($list), $element);
-            $this->html->find($class, $i)->outertext = $content_replaced;
-
-            $i++;
-        }
-    }
-
-    private function injectContents(): void
-    {
-        $additional_style = file_get_contents(dirname(__DIR__).'/src/assets/page-flow_page-flows.acb5aaf3.css');
-        $inject = '<style>' . $additional_style . '</style>';
-        $this->html->find('head', 0)->innertext = $inject . $this->html->find('head', 0)->innertext;
-        $this->html->find('.tm-svg-img', 0)->innertext = file_get_contents(dirname(__DIR__).'/src/assets/logo.svg');
-        $this->html = preg_replace('#<script(.*?)>(.*?)</script>#is', '', $this->html);
-    }
-
-    private function responseStaticContents(): void
-    {
-        if (empty($this->remote)) {
-            return;
+            $element->outertext = $content_replaced;
         }
 
-        $this->remote = $this->addProtocol($this->remote) . $this->remote;
-        $this->showResponseImage($this->remote);
-        $this->showResponseHtml($this->remote);
-    }
-
-    private function getPage($url)
-    {
-        if (is_callable('curl_init')) {
-
-            $ch = curl_init($url);
-            curl_setopt($ch, CURLOPT_HEADER, 1);
-            curl_setopt($ch, CURLOPT_POST, 1);
-            curl_setopt($ch, CURLOPT_USERAGENT,
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.85 Safari/537.36 Edg/90.0.818.46');
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
-            curl_setopt($ch, CURLOPT_REFERER, self::PROXY_URL);
-            curl_setopt($ch, CURLOPT_COOKIEFILE, __DIR__ . 'cookie.txt');
-            curl_setopt($ch, CURLOPT_COOKIEJAR, __DIR__ . 'cookie.txt');
-            curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
-            curl_setopt($ch, CURLOPT_PROXY, '23.107.176.45:32180');
-            // curl_setopt($ch, CURLOPT_PROXYUSERPWD, 'user:password'); // Use if proxy have username and password
-            // curl_setopt($ch, CURLOPT_PROXYTYPE, CURLPROXY_SOCKS5); // If expected to call with specific PROXY type
-            $output = curl_exec($ch);
-            if (curl_errno($ch) > 0) {
-                die('error ' . curl_error($ch));
-            }
-            curl_close($ch);
-            return $output;
-
+        foreach ($html->find('.tm-company-card__info') as $element) {
+            $content_replaced = preg_replace(array_keys($list), array_values($list), $element);
+            $element->outertext = $content_replaced;
         }
 
-        return file_get_contents($url);
     }
-
 
 }

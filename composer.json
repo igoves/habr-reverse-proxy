@@ -14,8 +14,10 @@
         }
     ],
     "require": {
-        "simplehtmldom/simplehtmldom": "dev-master",
-      "ext-mbstring": "*"
+      "simplehtmldom/simplehtmldom": "dev-master",
+      "ext-mbstring": "*",
+      "ext-curl": "*",
+      "ext-iconv": "*"
     },
     "require-dev": {
         "phpunit/phpunit": "7"
